@@ -2,45 +2,44 @@ const express = require("express");
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
-const { exec } = require("child_process");
+const sharp = require("sharp"); // lightweight 4K upscale
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.get("/img4k", async (req, res) => {
   const imageUrl = req.query.url;
+  if (!imageUrl) return res.json({ error: "No URL provided" });
 
-  if (!imageUrl)
-    return res.status(400).json({ error: "Missing image url" });
-
-  const input = path.join(__dirname, "input.jpg");
-  const output = path.join(__dirname, "output_4k.jpg");
+  const tempInput = path.join(__dirname, "cache", `input_${Date.now()}.jpg`);
+  const tempOutput = path.join(__dirname, "cache", `output_${Date.now()}.jpg`);
 
   try {
+    // Create cache folder if not exists
+    const cacheDir = path.join(__dirname, "cache");
+    if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir);
+
     // Download image
     const response = await axios.get(imageUrl, { responseType: "arraybuffer" });
-    fs.writeFileSync(input, response.data);
+    fs.writeFileSync(tempInput, Buffer.from(response.data));
 
-    // Convert to 4K (3840x2160)
-    exec(
-      `convert "${input}" -resize 3840x2160^ -gravity center -extent 3840x2160 "${output}"`,
-      (err) => {
-        if (err || !fs.existsSync(output)) {
-          return res.status(500).json({ error: "Image convert failed" });
-        }
+    // Use sharp to upscale
+    await sharp(tempInput)
+      .resize({ width: 3840, height: 2160, fit: "inside" }) // max 4K
+      .toFile(tempOutput);
 
-        res.sendFile(output, () => {
-          fs.unlinkSync(input);
-          fs.unlinkSync(output);
-        });
-      }
-    );
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Processing error" });
+    // Send image
+    res.setHeader("Content-Type", "image/jpeg");
+    res.sendFile(tempOutput, () => {
+      // Cleanup
+      fs.unlinkSync(tempInput);
+      fs.unlinkSync(tempOutput);
+    });
+
+  } catch (err) {
+    console.error("Processing error:", err.message);
+    res.json({ error: "Processing error" });
   }
 });
 
-app.listen(PORT, () => {
-  console.log("🟢 Image 4K API running on http://0.0.0.0:" + PORT);
-});
+app.listen(PORT, () => console.log(`🟢 Image 4K API running on http://0.0.0.0:${PORT}`));
